@@ -345,12 +345,27 @@ th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
   <div class="wrap">
 
     <div class="brand">
-      <img class="brandLogo" src="/NiG.png" alt="NiG" />
-      <h1 class="brandTitle">NiGanalysis · License Admin</h1>
-    </div>
+  <img class="brandLogo" src="/NiG.png" alt="NiG" />
+  <h1 class="brandTitle">NiGanalysis · License Admin</h1>
+</div>
 
+<section class="card" style="margin-bottom:14px">
+  <h2>Conexión admin</h2>
+  <div class="row">
+    <input id="backendBase" placeholder="https://niganalize-license-server-production.up.railway.app" />
+    <input id="adminSecret" type="password" placeholder="ADMIN_SECRET" />
+  </div>
+  <div class="row3">
+    <button onclick="saveAdminConfig()">Guardar conexión</button>
+    <button onclick="clearAdminConfig()">Limpiar</button>
+    <button onclick="testAdminConfig()">Probar conexión</button>
+  </div>
+  <div class="muted">
+    Escribí acá la URL pública de Railway y tu ADMIN_SECRET real. No lo hardcodees en el archivo.
+  </div>
+</section>
 
-    <div class="topGrid">
+<div class="topGrid">
 
   <div class="leftStack">
     <section class="card">
@@ -429,6 +444,75 @@ function getInputValue(id, fallback = "") {
 
 function baseUrl() {
   return getInputValue("backendBase", "") || window.location.origin;
+}
+
+const ADMIN_CFG_KEY = "nig_license_admin_cfg_v1";
+
+function readAdminConfig() {
+  try {
+    return JSON.parse(localStorage.getItem(ADMIN_CFG_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function loadAdminConfig() {
+  const cfg = readAdminConfig();
+
+  const baseEl = document.getElementById("backendBase");
+  const secretEl = document.getElementById("adminSecret");
+
+  if (baseEl) baseEl.value = String(cfg.backendBase || window.location.origin);
+  if (secretEl) secretEl.value = String(cfg.adminSecret || "");
+}
+
+function saveAdminConfig() {
+  const cfg = {
+    backendBase: getInputValue("backendBase", window.location.origin),
+    adminSecret: getInputValue("adminSecret", "")
+  };
+
+  localStorage.setItem(ADMIN_CFG_KEY, JSON.stringify(cfg));
+
+  show({
+    ok: true,
+    message: "Configuración admin guardada en este navegador.",
+    backendBase: cfg.backendBase
+  });
+}
+
+function clearAdminConfig() {
+  localStorage.removeItem(ADMIN_CFG_KEY);
+
+  const baseEl = document.getElementById("backendBase");
+  const secretEl = document.getElementById("adminSecret");
+
+  if (baseEl) baseEl.value = window.location.origin;
+  if (secretEl) secretEl.value = "";
+
+  show({
+    ok: true,
+    message: "Configuración admin limpiada."
+  });
+}
+
+async function testAdminConfig() {
+  try {
+    const payload = await api("GET", "/admin/licenses?limit=1");
+    show({
+      ok: true,
+      message: "Conexión admin correcta.",
+      backendBase: baseUrl(),
+      summary: payload?.summary || null
+    });
+  } catch (e) {
+    show(e);
+  }
+}
+
+function initAdminUi() {
+  loadAdminConfig();
+  listLicenses();
 }
 
 async function downloadBackup() {
@@ -800,7 +884,7 @@ function renderTable(payload) {
     </div>
   \`;
 }
-listLicenses();
+initAdminUi();
 </script>
 </body>
 </html>`;
@@ -987,6 +1071,10 @@ app.get("/health", async () => {
     service: "niganalize-license-server",
     time_utc: nowIso()
   };
+});
+
+app.get("/", async (req, reply) => {
+  return reply.redirect("/admin/ui");
 });
 
 app.get("/admin/ui", async (_req, reply) => {
