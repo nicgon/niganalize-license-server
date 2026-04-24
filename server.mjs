@@ -20,7 +20,8 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || "cambiar-esto";
 
 const SIGNING_KEY_FILE = SIGNING_KEY_PATH;
 
-const TRIAL_DAYS = 30;
+const DEFAULT_TRIAL_AMOUNT = 30;
+const DEFAULT_TRIAL_UNIT = "days";
 const LICENSE_DAYS_DEFAULT = 365;
 const REFRESH_TOKEN_DAYS = 30;
 
@@ -369,6 +370,26 @@ th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
 
   <div class="leftStack">
     <section class="card">
+      <h2>Configuracion trial</h2>
+      <div class="row3">
+        <input id="trialAmount" type="number" min="1" value="30" />
+        <select id="trialUnit">
+          <option value="days">Dias</option>
+          <option value="minutes">Minutos</option>
+        </select>
+        <button onclick="saveTrialConfig()">Guardar trial</button>
+      </div>
+      <div class="row3">
+        <button onclick="loadTrialConfig()">Leer config</button>
+        <button onclick="setTrialPreset(30, 'days')">30 dias</button>
+        <button onclick="setTrialPreset(5, 'minutes')">5 min</button>
+      </div>
+      <div class="muted">
+        Esto afecta los nuevos trial emitidos por el servidor. Los trial ya creados conservan su vencimiento actual.
+      </div>
+    </section>
+
+    <section class="card">
       <h2>Crear licencia</h2>
       <div class="row">
         <input id="createCustomer" placeholder="Cliente sin nombre" />
@@ -512,6 +533,7 @@ async function testAdminConfig() {
 
 function initAdminUi() {
   loadAdminConfig();
+  loadTrialConfig(false).catch(() => {});
   listLicenses();
 }
 
@@ -591,6 +613,41 @@ function key() {
 }
 function reason() {
   return document.getElementById("reason").value.trim() || "admin_action";
+}
+function applyTrialConfigInputs(payload) {
+  const cfg = payload?.trial_config || payload?.config || payload || {};
+  const amountEl = document.getElementById("trialAmount");
+  const unitEl = document.getElementById("trialUnit");
+  if (amountEl) amountEl.value = String(Number(cfg.amount || 30));
+  if (unitEl) unitEl.value = String(cfg.unit || "days");
+}
+async function loadTrialConfig(showResult = true) {
+  try {
+    const payload = await api("GET", "/admin/trial/config");
+    applyTrialConfigInputs(payload);
+    if (showResult) show(payload);
+    return payload;
+  } catch (e) {
+    if (showResult) show(e);
+    throw e;
+  }
+}
+async function saveTrialConfig() {
+  try {
+    const amount = Number(document.getElementById("trialAmount").value || 30);
+    const unit = String(document.getElementById("trialUnit").value || "days");
+    const payload = await api("POST", "/admin/trial/config", { amount, unit });
+    applyTrialConfigInputs(payload);
+    show(payload);
+  } catch (e) {
+    show(e);
+  }
+}
+function setTrialPreset(amount, unit) {
+  const amountEl = document.getElementById("trialAmount");
+  const unitEl = document.getElementById("trialUnit");
+  if (amountEl) amountEl.value = String(amount);
+  if (unitEl) unitEl.value = String(unit);
 }
 async function api(method, path, body) {
   const res = await fetch(baseUrl() + path, {
@@ -899,6 +956,36 @@ function addDaysIso(days) {
   return d.toISOString();
 }
 
+function addMinutesIso(minutes) {
+  const d = new Date();
+  d.setUTCMinutes(d.getUTCMinutes() + minutes);
+  return d.toISOString();
+}
+
+function normalizeTrialUnit(unit) {
+  return String(unit || DEFAULT_TRIAL_UNIT).trim().toLowerCase() === "minutes"
+    ? "minutes"
+    : "days";
+}
+
+function normalizeTrialConfig(raw) {
+  const unit = normalizeTrialUnit(raw?.unit);
+  const defaultAmount = unit === "minutes" ? 5 : DEFAULT_TRIAL_AMOUNT;
+  const amount = Math.max(1, Math.floor(Number(raw?.amount || defaultAmount) || defaultAmount));
+  return { amount, unit };
+}
+
+function getTrialConfig(db) {
+  return normalizeTrialConfig(db?.settings?.trial);
+}
+
+function addTrialDurationIso(config) {
+  const safe = normalizeTrialConfig(config);
+  return safe.unit === "minutes"
+    ? addMinutesIso(safe.amount)
+    : addDaysIso(safe.amount);
+}
+
 function isExpired(iso) {
   return new Date(iso).getTime() < Date.now();
 }
@@ -1079,6 +1166,45 @@ app.get("/", async (req, reply) => {
 
 app.get("/admin/ui", async (_req, reply) => {
   reply.type("text/html; charset=utf-8").send(ADMIN_UI_HTML);
+});
+
+app.get("/admin/trial/config", async (req, reply) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+
+  const db = await loadDb();
+  return {
+    ok: true,
+    trial_config: getTrialConfig(db)
+  };
+});
+
+app.post("/admin/trial/config", async (req, reply) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+
+  const body = req.body || {};
+  const unit = normalizeTrialUnit(body.unit);
+  const amount = Math.max(1, Math.floor(Number(body.amount || 0)));
+
+  if (!Number.isFinite(amount) || amount < 1) {
+    return reply.code(400).send({ error: "invalid_trial_amount" });
+  }
+
+  const db = await loadDb();
+  db.settings = db.settings || {};
+  db.settings.trial = normalizeTrialConfig({ amount, unit });
+  await saveDb(db);
+
+  return {
+    ok: true,
+    message: "Configuracion de trial actualizada.",
+    trial_config: getTrialConfig(db)
+  };
 });
 
 app.post("/admin/license/create", async (req, reply) => {
@@ -1348,12 +1474,13 @@ app.post("/v1/trial/start", async (req, reply) => {
   );
 
   if (!trial) {
+    const trialConfig = getTrialConfig(db);
     trial = {
       id: makeId("trial"),
       device_id,
       fingerprint_hash,
       started_at_utc: nowIso(),
-      expires_at_utc: addDaysIso(TRIAL_DAYS)
+      expires_at_utc: addTrialDurationIso(trialConfig)
     };
     db.trials.push(trial);
   }
@@ -1367,6 +1494,7 @@ app.post("/v1/trial/start", async (req, reply) => {
       status,
       status === "trial_active" ? "Trial online activo." : "Trial online expirado."
     ),
+    trial_config: getTrialConfig(db),
     trial_expires_at_utc: trial.expires_at_utc,
     license_token: randomToken(),
     refresh_token: randomToken()

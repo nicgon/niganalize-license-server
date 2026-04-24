@@ -32,7 +32,11 @@ function normalizeDbShape(raw) {
     trials: Array.isArray(raw?.trials) ? raw.trials : [],
     licenses: Array.isArray(raw?.licenses) ? raw.licenses : [],
     activations: Array.isArray(raw?.activations) ? raw.activations : [],
-    refresh_tokens: Array.isArray(raw?.refresh_tokens) ? raw.refresh_tokens : []
+    refresh_tokens: Array.isArray(raw?.refresh_tokens) ? raw.refresh_tokens : [],
+    settings:
+      raw?.settings && typeof raw.settings === "object" && !Array.isArray(raw.settings)
+        ? raw.settings
+        : {}
   };
 }
 
@@ -57,6 +61,27 @@ function setBucket(key, arr) {
   `).run(key, JSON.stringify(arr ?? []), nowIso());
 }
 
+function getObject(key) {
+  const row = db.prepare("SELECT payload FROM kv_store WHERE key = ?").get(key);
+  if (!row) return {};
+  try {
+    const parsed = JSON.parse(row.payload);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setObject(key, value) {
+  db.prepare(`
+    INSERT INTO kv_store (key, payload, updated_at_utc)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      payload = excluded.payload,
+      updated_at_utc = excluded.updated_at_utc
+  `).run(key, JSON.stringify(value ?? {}), nowIso());
+}
+
 function hasAnyData() {
   const row = db.prepare("SELECT COUNT(*) AS c FROM kv_store").get();
   return Number(row?.c || 0) > 0;
@@ -69,6 +94,7 @@ const saveAllTx = db.transaction((state) => {
   setBucket("licenses", safe.licenses);
   setBucket("activations", safe.activations);
   setBucket("refresh_tokens", safe.refresh_tokens);
+  setObject("settings", safe.settings);
 });
 
 async function migrateLegacyJsonIfNeeded() {
@@ -96,7 +122,8 @@ export async function loadDb() {
     trials: getBucket("trials"),
     licenses: getBucket("licenses"),
     activations: getBucket("activations"),
-    refresh_tokens: getBucket("refresh_tokens")
+    refresh_tokens: getBucket("refresh_tokens"),
+    settings: getObject("settings")
   });
 }
 
