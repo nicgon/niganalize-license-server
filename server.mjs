@@ -390,6 +390,29 @@ th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
     </section>
 
     <section class="card">
+      <h2>Trial por dispositivo</h2>
+      <div class="row">
+        <input id="targetTrialQuery" placeholder="Device ID o Fingerprint" />
+      </div>
+      <div class="row3">
+        <input id="targetTrialAmount" type="number" min="1" value="5" />
+        <select id="targetTrialUnit">
+          <option value="minutes">Minutos</option>
+          <option value="days">Dias</option>
+        </select>
+        <button onclick="saveTargetTrial()">Aplicar trial puntual</button>
+      </div>
+      <div class="row3">
+        <button onclick="inspectTrialTarget()">Ver trial</button>
+        <button onclick="expireTargetTrial()">Expirar trial</button>
+        <button onclick="copyGlobalTrialToTarget()">Copiar config global</button>
+      </div>
+      <div class="muted">
+        Pegá el Device ID o el Fingerprint de la PC. Esto solo afecta a ese equipo puntual.
+      </div>
+    </section>
+
+    <section class="card">
       <h2>Crear licencia</h2>
       <div class="row">
         <input id="createCustomer" placeholder="Cliente sin nombre" />
@@ -621,6 +644,9 @@ function applyTrialConfigInputs(payload) {
   if (amountEl) amountEl.value = String(Number(cfg.amount || 30));
   if (unitEl) unitEl.value = String(cfg.unit || "days");
 }
+function trialTargetQuery() {
+  return getInputValue("targetTrialQuery", "");
+}
 async function loadTrialConfig(showResult = true) {
   try {
     const payload = await api("GET", "/admin/trial/config");
@@ -648,6 +674,43 @@ function setTrialPreset(amount, unit) {
   const unitEl = document.getElementById("trialUnit");
   if (amountEl) amountEl.value = String(amount);
   if (unitEl) unitEl.value = String(unit);
+}
+function copyGlobalTrialToTarget() {
+  const sourceAmount = document.getElementById("trialAmount");
+  const sourceUnit = document.getElementById("trialUnit");
+  const targetAmount = document.getElementById("targetTrialAmount");
+  const targetUnit = document.getElementById("targetTrialUnit");
+  if (sourceAmount && targetAmount) targetAmount.value = sourceAmount.value;
+  if (sourceUnit && targetUnit) targetUnit.value = sourceUnit.value;
+}
+async function inspectTrialTarget() {
+  try {
+    const query = trialTargetQuery();
+    const payload = await api("GET", "/admin/trial/by-device/" + encodeURIComponent(query));
+    show(payload);
+  } catch (e) {
+    show(e);
+  }
+}
+async function saveTargetTrial() {
+  try {
+    const query = trialTargetQuery();
+    const amount = Number(document.getElementById("targetTrialAmount").value || 5);
+    const unit = String(document.getElementById("targetTrialUnit").value || "minutes");
+    const payload = await api("POST", "/admin/trial/assign", { query, amount, unit });
+    show(payload);
+  } catch (e) {
+    show(e);
+  }
+}
+async function expireTargetTrial() {
+  try {
+    const query = trialTargetQuery();
+    const payload = await api("POST", "/admin/trial/expire", { query });
+    show(payload);
+  } catch (e) {
+    show(e);
+  }
 }
 async function api(method, path, body) {
   const res = await fetch(baseUrl() + path, {
@@ -986,6 +1049,81 @@ function addTrialDurationIso(config) {
     : addDaysIso(safe.amount);
 }
 
+function uniqueBy(items, keyFn) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items || []) {
+    const key = keyFn(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function resolveTrialTarget(db, rawQuery) {
+  const query = String(rawQuery || "").trim().toLowerCase();
+  if (!query) {
+    return { error: "missing_query" };
+  }
+
+  const deviceCandidates = (db.devices || []).map((d) => ({
+    source: "device",
+    device_id: String(d.device_id || ""),
+    fingerprint_hash: String(d.fingerprint_hash || ""),
+    machine_name: String(d.machine_name || ""),
+    app_version: String(d.app_version || ""),
+    first_seen_utc: d.first_seen_utc || null,
+    last_seen_utc: d.last_seen_utc || null
+  }));
+
+  const trialCandidates = (db.trials || []).map((t) => ({
+    source: "trial",
+    device_id: String(t.device_id || ""),
+    fingerprint_hash: String(t.fingerprint_hash || ""),
+    machine_name: "",
+    app_version: "",
+    first_seen_utc: t.started_at_utc || null,
+    last_seen_utc: t.started_at_utc || null
+  }));
+
+  const candidates = uniqueBy(
+    [...deviceCandidates, ...trialCandidates],
+    (x) => `${x.device_id}::${x.fingerprint_hash}`
+  );
+
+  const matches = candidates.filter((item) => {
+    const dev = String(item.device_id || "").toLowerCase();
+    const fp = String(item.fingerprint_hash || "").toLowerCase();
+    return dev === query || fp === query || dev.startsWith(query) || fp.startsWith(query);
+  });
+
+  if (matches.length === 0) {
+    return { error: "trial_target_not_found" };
+  }
+
+  if (matches.length > 1) {
+    return {
+      error: "ambiguous_trial_target",
+      candidates: matches.slice(0, 10).map((item) => ({
+        device_id: item.device_id,
+        fingerprint_hash: item.fingerprint_hash,
+        machine_name: item.machine_name || "",
+        source: item.source
+      }))
+    };
+  }
+
+  const target = matches[0];
+  const trial = (db.trials || []).find(
+    (t) =>
+      String(t.device_id || "") === target.device_id ||
+      String(t.fingerprint_hash || "") === target.fingerprint_hash
+  ) || null;
+
+  return { target, trial };
+}
+
 function isExpired(iso) {
   return new Date(iso).getTime() < Date.now();
 }
@@ -1204,6 +1342,143 @@ app.post("/admin/trial/config", async (req, reply) => {
     ok: true,
     message: "Configuracion de trial actualizada.",
     trial_config: getTrialConfig(db)
+  };
+});
+
+app.get("/admin/trial/by-device/:query", async (req, reply) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+
+  const db = await loadDb();
+  const resolved = resolveTrialTarget(db, req.params?.query);
+
+  if (resolved.error === "missing_query") {
+    return reply.code(400).send({ error: resolved.error });
+  }
+  if (resolved.error === "trial_target_not_found") {
+    return reply.code(404).send({ error: resolved.error });
+  }
+  if (resolved.error === "ambiguous_trial_target") {
+    return reply.code(409).send({
+      error: resolved.error,
+      candidates: resolved.candidates || []
+    });
+  }
+
+  return {
+    ok: true,
+    target: resolved.target,
+    trial: resolved.trial,
+    global_trial_config: getTrialConfig(db)
+  };
+});
+
+app.post("/admin/trial/assign", async (req, reply) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+
+  const body = req.body || {};
+  const db = await loadDb();
+  const resolved = resolveTrialTarget(db, body.query);
+
+  if (resolved.error === "missing_query") {
+    return reply.code(400).send({ error: resolved.error });
+  }
+  if (resolved.error === "trial_target_not_found") {
+    return reply.code(404).send({ error: resolved.error });
+  }
+  if (resolved.error === "ambiguous_trial_target") {
+    return reply.code(409).send({
+      error: resolved.error,
+      candidates: resolved.candidates || []
+    });
+  }
+
+  const trialConfig = normalizeTrialConfig({
+    amount: body.amount,
+    unit: body.unit
+  });
+
+  let trial = resolved.trial;
+  if (!trial) {
+    trial = {
+      id: makeId("trial"),
+      device_id: resolved.target.device_id,
+      fingerprint_hash: resolved.target.fingerprint_hash,
+      started_at_utc: nowIso(),
+      expires_at_utc: addTrialDurationIso(trialConfig)
+    };
+    db.trials.push(trial);
+  } else {
+    trial.started_at_utc = nowIso();
+    trial.expires_at_utc = addTrialDurationIso(trialConfig);
+  }
+
+  trial.admin_override_utc = nowIso();
+  trial.admin_override_config = trialConfig;
+
+  await saveDb(db);
+
+  return {
+    ok: true,
+    message: "Trial puntual actualizado.",
+    target: resolved.target,
+    trial,
+    applied_trial_config: trialConfig
+  };
+});
+
+app.post("/admin/trial/expire", async (req, reply) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+
+  const body = req.body || {};
+  const db = await loadDb();
+  const resolved = resolveTrialTarget(db, body.query);
+
+  if (resolved.error === "missing_query") {
+    return reply.code(400).send({ error: resolved.error });
+  }
+  if (resolved.error === "trial_target_not_found") {
+    return reply.code(404).send({ error: resolved.error });
+  }
+  if (resolved.error === "ambiguous_trial_target") {
+    return reply.code(409).send({
+      error: resolved.error,
+      candidates: resolved.candidates || []
+    });
+  }
+
+  let trial = resolved.trial;
+  if (!trial) {
+    trial = {
+      id: makeId("trial"),
+      device_id: resolved.target.device_id,
+      fingerprint_hash: resolved.target.fingerprint_hash,
+      started_at_utc: nowIso(),
+      expires_at_utc: nowIso()
+    };
+    db.trials.push(trial);
+  } else {
+    trial.expires_at_utc = nowIso();
+  }
+
+  trial.admin_override_utc = nowIso();
+  trial.admin_override_config = { amount: 0, unit: "minutes", mode: "expired_now" };
+
+  await saveDb(db);
+
+  return {
+    ok: true,
+    message: "Trial puntual expirado.",
+    target: resolved.target,
+    trial
   };
 });
 
