@@ -20,10 +20,14 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || "cambiar-esto";
 
 const SIGNING_KEY_FILE = SIGNING_KEY_PATH;
 
-const DEFAULT_TRIAL_AMOUNT = 30;
+const DEFAULT_TRIAL_AMOUNT = 15;
 const DEFAULT_TRIAL_UNIT = "days";
 const LICENSE_DAYS_DEFAULT = 365;
 const REFRESH_TOKEN_DAYS = 30;
+const TRIAL_FULL_FEATURES = Object.freeze({
+  ai: true,
+  motec_export: true
+});
 
 const app = Fastify({ logger: true });
 const ADMIN_UI_HTML = `<!doctype html>
@@ -208,9 +212,9 @@ button.btnFlash{
     background:#0a0f14;
   }
 
-  table{
+table{
   width:100%;
-  min-width:760px;
+  min-width:880px;
   table-layout:fixed;
   border-collapse:separate;
   border-spacing:0;
@@ -230,9 +234,10 @@ th:nth-child(3), td:nth-child(3){ width:92px; }   /* cliente */
 th:nth-child(4), td:nth-child(4){ width:110px; }  /* expira */
 th:nth-child(5), td:nth-child(5){ width:115px; }  /* device */
 th:nth-child(6), td:nth-child(6){ width:130px; }  /* fingerprint */
-th:nth-child(7), td:nth-child(7){ width:38px; }   /* refresh */
-th:nth-child(8), td:nth-child(8){ width:36px; }   /* dias */
-th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
+th:nth-child(7), td:nth-child(7){ width:54px; }   /* modelo */
+th:nth-child(8), td:nth-child(8){ width:38px; }   /* refresh */
+th:nth-child(9), td:nth-child(9){ width:36px; }   /* dias */
+th:nth-child(10), td:nth-child(10){ width:82px; } /* acciones */
 
   th{
     color:var(--muted);
@@ -372,7 +377,7 @@ th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
     <section class="card">
       <h2>Configuracion trial</h2>
       <div class="row3">
-        <input id="trialAmount" type="number" min="1" value="30" />
+        <input id="trialAmount" type="number" min="1" value="15" />
         <select id="trialUnit">
           <option value="days">Dias</option>
           <option value="minutes">Minutos</option>
@@ -381,11 +386,11 @@ th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
       </div>
       <div class="row3">
         <button onclick="loadTrialConfig()">Leer config</button>
-        <button onclick="setTrialPreset(30, 'days')">30 dias</button>
+        <button onclick="setTrialPreset(15, 'days')">15 dias</button>
         <button onclick="setTrialPreset(5, 'minutes')">5 min</button>
       </div>
       <div class="muted">
-        Esto afecta los nuevos trial emitidos por el servidor. Los trial ya creados conservan su vencimiento actual.
+        Trial global de la app. Trial activo sin override puntual se recalcula con esta configuracion.
       </div>
     </section>
 
@@ -419,6 +424,12 @@ th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
         <input id="createDays" type="number" value="365" />
       </div>
       <div class="row">
+        <select id="createModel">
+          <option value="pro">Licencia Pro</option>
+          <option value="ai">Licencia AI</option>
+        </select>
+      </div>
+      <div class="row">
         <button onclick="createLicense()">Crear licencia</button>
       </div>
     </section>
@@ -447,6 +458,12 @@ th:nth-child(9), td:nth-child(9){ width:76px; }   /* acciones */
         <button onclick="quickAdjust(-365)">-365d</button>
         <button onclick="quickAdjust(30)">+30d</button>
         <button onclick="quickAdjust(365)">+365d</button>
+      </div>
+
+      <div class="row3">
+        <button onclick="setLicenseModel('pro')">Modelo Pro</button>
+        <button onclick="setLicenseModel('ai')">Modelo AI</button>
+        <button onclick="getByKey()">Leer modelo</button>
       </div>
 
       <div class="muted">Usá días positivos para sumar y negativos para restar.</div>
@@ -641,7 +658,7 @@ function applyTrialConfigInputs(payload) {
   const cfg = payload?.trial_config || payload?.config || payload || {};
   const amountEl = document.getElementById("trialAmount");
   const unitEl = document.getElementById("trialUnit");
-  if (amountEl) amountEl.value = String(Number(cfg.amount || 30));
+  if (amountEl) amountEl.value = String(Number(cfg.amount || 15));
   if (unitEl) unitEl.value = String(cfg.unit || "days");
 }
 function trialTargetQuery() {
@@ -660,7 +677,7 @@ async function loadTrialConfig(showResult = true) {
 }
 async function saveTrialConfig() {
   try {
-    const amount = Number(document.getElementById("trialAmount").value || 30);
+    const amount = Number(document.getElementById("trialAmount").value || 15);
     const unit = String(document.getElementById("trialUnit").value || "days");
     const payload = await api("POST", "/admin/trial/config", { amount, unit });
     applyTrialConfigInputs(payload);
@@ -728,7 +745,8 @@ async function createLicense() {
   try {
     const customer_name = document.getElementById("createCustomer").value.trim();
     const days = Number(document.getElementById("createDays").value || 365);
-    const payload = await api("POST", "/admin/license/create", { customer_name, days });
+    const app_model = getInputValue("createModel", "pro");
+    const payload = await api("POST", "/admin/license/create", { customer_name, days, app_model });
     show(payload);
     if (payload?.license?.license_key) {
       document.getElementById("licenseKey").value = payload.license.license_key;
@@ -787,6 +805,17 @@ async function extendLicense() {
       reason: reason()
     });
 
+    show(payload);
+    await listLicenses();
+  } catch (e) { show(e); }
+}
+
+async function setLicenseModel(app_model) {
+  try {
+    const payload = await api("POST", "/admin/license/features", {
+      license_key: key(),
+      app_model
+    });
     show(payload);
     await listLicenses();
   } catch (e) { show(e); }
@@ -856,6 +885,16 @@ async function quickAction(kind, keyValue) {
       return;
     }
 
+    if (kind === "model_ai") {
+      await setLicenseModel("ai");
+      return;
+    }
+
+    if (kind === "model_pro") {
+      await setLicenseModel("pro");
+      return;
+    }
+
     if (kind === "reduce30") {
       document.getElementById("extendDays").value = "-30";
       await extendLicense();
@@ -884,7 +923,7 @@ function renderTable(payload) {
   const summary = payload?.summary || {};
 
   const summaryHtml = \`
-    <div style="display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px;margin-bottom:14px">
+    <div style="display:grid;grid-template-columns:repeat(7,minmax(120px,1fr));gap:10px;margin-bottom:14px">
       <div class="card" style="padding:10px 12px;border-radius:14px">
         <div class="muted">Mostradas</div>
         <div style="font-size:20px;font-weight:800">\${Number(summary.total || 0)}</div>
@@ -909,6 +948,10 @@ function renderTable(payload) {
         <div class="muted">Atadas a device</div>
         <div style="font-size:20px;font-weight:800">\${Number(summary.active_bound || 0)}</div>
       </div>
+      <div class="card" style="padding:10px 12px;border-radius:14px">
+        <div class="muted">AI</div>
+        <div style="font-size:20px;font-weight:800">\${Number(summary.ai_enabled || 0)}</div>
+      </div>
     </div>
   \`;
 
@@ -927,6 +970,12 @@ function renderTable(payload) {
             : (x.expiring_soon
                 ? "background:rgba(243,201,77,.12);border-color:rgba(243,201,77,.28);color:#ffe08a"
                 : "background:rgba(33,197,139,.10);border-color:rgba(33,197,139,.25);color:#9df0cb"));
+    const model = String(x.app_model || (x.features?.ai ? "ai" : "pro")).toLowerCase();
+    const modelLabel = model === "ai" ? "AI" : "Pro";
+    const modelTone =
+      model === "ai"
+        ? "background:rgba(0,210,255,.12);border-color:rgba(0,210,255,.35);color:#9beeff"
+        : "background:rgba(159,176,195,.10);border-color:rgba(159,176,195,.26);color:#d7e5f7";
 
     return \`
       <tr>
@@ -966,6 +1015,10 @@ function renderTable(payload) {
           </span>
         </td>
 
+        <td>
+          <span class="pill" style="\${modelTone}">\${modelLabel}</span>
+        </td>
+
         <td>\${Number(x.active_refresh_tokens ?? 0)}</td>
         <td>\${x.days_to_expiry == null ? "" : Number(x.days_to_expiry)}</td>
 
@@ -976,6 +1029,7 @@ function renderTable(payload) {
     <button class="btnTiny btnDanger" onclick="quickAction('revoke','\${k}')">Revocar</button>
     <button class="btnTiny btnWarn" onclick="quickAction('release','\${k}')">Liberar</button>
     <button class="btnTiny btnOk" onclick="quickAction('restore','\${k}')">Restaurar</button>
+    <button class="btnTiny" onclick="quickAction('\${model === "ai" ? "model_pro" : "model_ai"}','\${k}')">\${model === "ai" ? "A Pro" : "A AI"}</button>
   </div>
 </td>
       </tr>
@@ -994,6 +1048,7 @@ function renderTable(payload) {
             <th>Expira</th>
             <th>Device activo</th>
             <th>Fingerprint activo</th>
+            <th>Modelo</th>
             <th>Refresh activos</th>
             <th>Días</th>
             <th>Acciones</th>
@@ -1040,6 +1095,20 @@ function normalizeTrialConfig(raw) {
 
 function getTrialConfig(db) {
   return normalizeTrialConfig(db?.settings?.trial);
+}
+
+function addTrialDurationFromIso(startIso, config) {
+  const safe = normalizeTrialConfig(config);
+  const d = new Date(startIso || nowIso());
+  if (!Number.isFinite(d.getTime())) {
+    return addTrialDurationIso(safe);
+  }
+  if (safe.unit === "minutes") {
+    d.setUTCMinutes(d.getUTCMinutes() + safe.amount);
+  } else {
+    d.setUTCDate(d.getUTCDate() + safe.amount);
+  }
+  return d.toISOString();
 }
 
 function addTrialDurationIso(config) {
@@ -1147,6 +1216,60 @@ function normalizeKey(k) {
   return String(k || "").trim().toUpperCase();
 }
 
+function normalizeLicenseFeatures(input = {}) {
+  const raw = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  return {
+    ai: Boolean(raw.ai),
+    motec_export: Boolean(raw.motec_export)
+  };
+}
+
+function normalizeAppModel(appModel, fallback = "pro") {
+  const model = String(appModel || fallback || "pro").trim().toLowerCase();
+  if (model === "ai" || model === "trial") return model;
+  return "pro";
+}
+
+function featuresForAppModel(appModel) {
+  const model = normalizeAppModel(appModel, "pro");
+  if (model === "ai" || model === "trial") return { ...TRIAL_FULL_FEATURES };
+  return normalizeLicenseFeatures();
+}
+
+function licenseFeatures(license = {}) {
+  const stored = normalizeLicenseFeatures(license.features);
+  const model = normalizeAppModel(license.app_model || license.license_kind, "pro");
+  if (model === "ai" || model === "trial" || stored.ai || stored.motec_export) {
+    return { ...TRIAL_FULL_FEATURES };
+  }
+  return normalizeLicenseFeatures();
+}
+
+function licenseAppModel(license = {}) {
+  const model = normalizeAppModel(license.app_model || license.license_kind, "pro");
+  if (model === "ai" || model === "trial") return model;
+  const features = normalizeLicenseFeatures(license.features);
+  return features.ai || features.motec_export ? "ai" : "pro";
+}
+
+function applyLicenseFeatures(license, features) {
+  const requested = normalizeLicenseFeatures(features);
+  const enabled = requested.ai || requested.motec_export
+    ? { ...TRIAL_FULL_FEATURES }
+    : normalizeLicenseFeatures();
+  license.features = enabled;
+  license.app_model = enabled.ai ? "ai" : "pro";
+  license.license_kind = license.app_model;
+  return license;
+}
+
+function licenseFeatureResponse(license) {
+  return {
+    features: licenseFeatures(license),
+    app_model: licenseAppModel(license)
+  };
+}
+
 function b64urlEncode(buf) {
   return Buffer.from(buf).toString("base64url");
 }
@@ -1198,6 +1321,8 @@ function issueLicenseToken({ license, device_id, fingerprint_hash }) {
     typ: "license",
     license_id: license.id,
     license_kind: license.license_kind,
+    app_model: licenseAppModel(license),
+    features: licenseFeatures(license),
     device_id,
     fingerprint_hash,
     iat: nowIso(),
@@ -1228,6 +1353,8 @@ function buildResponseBase(status, message) {
     trial_expires_at_utc: null,
     license_id: null,
     license_kind: null,
+    app_model: null,
+    features: normalizeLicenseFeatures(),
     issued_at_utc: null,
     expires_at_utc: null,
     license_token: null,
@@ -1491,19 +1618,23 @@ app.post("/admin/license/create", async (req, reply) => {
   const body = req.body || {};
   const customer_name = String(body.customer_name || "Cliente sin nombre");
   const days = Number(body.days || LICENSE_DAYS_DEFAULT);
+  const appModel = normalizeAppModel(body.app_model, "pro");
+  const features = body.features
+    ? normalizeLicenseFeatures(body.features)
+    : featuresForAppModel(appModel);
 
   const db = await loadDb();
 
-  const license = {
+  const license = applyLicenseFeatures({
     id: makeId("lic"),
     license_key: makeLicenseKey(),
     customer_name,
     status: "issued",
-    license_kind: "annual",
+    license_kind: appModel,
     issued_at_utc: nowIso(),
     expires_at_utc: addDaysIso(days),
     max_seats: 1
-  };
+  }, features);
 
   db.licenses.push(license);
   await saveDb(db);
@@ -1680,6 +1811,45 @@ app.post("/admin/license/extend", async (req, reply) => {
   };
 });
 
+app.post("/admin/license/features", async (req, reply) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== ADMIN_SECRET) {
+    return reply.code(401).send({ error: "unauthorized" });
+  }
+
+  const body = req.body || {};
+  const key = normalizeKey(body.license_key);
+
+  if (!key) {
+    return reply.code(400).send({ error: "missing_license_key" });
+  }
+
+  const db = await loadDb();
+  const license = db.licenses.find((l) => normalizeKey(l.license_key) === key);
+  if (!license) {
+    return reply.code(404).send({ error: "license_not_found" });
+  }
+
+  const appModel = normalizeAppModel(body.app_model, licenseAppModel(license));
+  const features = body.features
+    ? normalizeLicenseFeatures(body.features)
+    : featuresForAppModel(appModel);
+
+  applyLicenseFeatures(license, features);
+  license.features_updated_at_utc = nowIso();
+
+  await saveDb(db);
+
+  return {
+    ok: true,
+    license_id: license.id,
+    license_key: license.license_key,
+    license_kind: license.license_kind,
+    features: licenseFeatures(license),
+    app_model: licenseAppModel(license)
+  };
+});
+
 app.get("/admin/license/by-key/:licenseKey", async (req, reply) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== ADMIN_SECRET) {
@@ -1747,17 +1917,27 @@ app.post("/v1/trial/start", async (req, reply) => {
   let trial = db.trials.find(
     (t) => t.fingerprint_hash === fingerprint_hash
   );
+  const trialConfig = trial?.admin_override_config
+    ? normalizeTrialConfig(trial.admin_override_config)
+    : getTrialConfig(db);
 
   if (!trial) {
-    const trialConfig = getTrialConfig(db);
+    const startedAt = nowIso();
     trial = {
       id: makeId("trial"),
       device_id,
       fingerprint_hash,
-      started_at_utc: nowIso(),
-      expires_at_utc: addTrialDurationIso(trialConfig)
+      started_at_utc: startedAt,
+      expires_at_utc: addTrialDurationFromIso(startedAt, trialConfig),
+      trial_config: trialConfig
     };
     db.trials.push(trial);
+  } else if (!trial.admin_override_config) {
+    trial.device_id = trial.device_id || device_id;
+    trial.fingerprint_hash = trial.fingerprint_hash || fingerprint_hash;
+    trial.started_at_utc = trial.started_at_utc || nowIso();
+    trial.expires_at_utc = addTrialDurationFromIso(trial.started_at_utc, trialConfig);
+    trial.trial_config = trialConfig;
   }
 
   await saveDb(db);
@@ -1769,8 +1949,10 @@ app.post("/v1/trial/start", async (req, reply) => {
       status,
       status === "trial_active" ? "Trial online activo." : "Trial online expirado."
     ),
-    trial_config: getTrialConfig(db),
+    trial_config: trialConfig,
     trial_expires_at_utc: trial.expires_at_utc,
+    features: { ...TRIAL_FULL_FEATURES },
+    app_model: "trial",
     license_token: randomToken(),
     refresh_token: randomToken()
   };
@@ -1808,6 +1990,7 @@ app.post("/v1/license/activate", async (req, reply) => {
       ...buildResponseBase("licensed_expired", "La licencia está vencida."),
       license_id: license.id,
       license_kind: license.license_kind,
+      ...licenseFeatureResponse(license),
       issued_at_utc: license.issued_at_utc,
       expires_at_utc: license.expires_at_utc
     };
@@ -1875,6 +2058,7 @@ app.post("/v1/license/activate", async (req, reply) => {
     ...buildResponseBase("licensed_active", "Licencia activada correctamente."),
     license_id: license.id,
     license_kind: license.license_kind,
+    ...licenseFeatureResponse(license),
     issued_at_utc: license.issued_at_utc,
     expires_at_utc: license.expires_at_utc,
     license_token: issueLicenseToken({
@@ -1925,6 +2109,8 @@ app.get("/admin/licenses", async (req, reply) => {
         customer_name: lic.customer_name || "",
         status: lic.status,
         license_kind: lic.license_kind,
+        features: licenseFeatures(lic),
+        app_model: licenseAppModel(lic),
         issued_at_utc: lic.issued_at_utc,
         expires_at_utc: lic.expires_at_utc,
         revoked_at_utc: lic.revoked_at_utc || null,
@@ -1955,6 +2141,7 @@ app.get("/admin/licenses", async (req, reply) => {
         x.license_key,
         x.customer_name,
         x.status,
+        x.app_model,
         x.active_device_id,
         x.active_fingerprint_hash,
         x.id
@@ -1981,7 +2168,8 @@ app.get("/admin/licenses", async (req, reply) => {
     revoked: licenses.filter((x) => x.status === "revoked").length,
     expired_now: licenses.filter((x) => x.expired_now).length,
     expiring_soon: licenses.filter((x) => x.expiring_soon).length,
-    active_bound: licenses.filter((x) => !!x.active_device_id).length
+    active_bound: licenses.filter((x) => !!x.active_device_id).length,
+    ai_enabled: licenses.filter((x) => !!x.features?.ai).length
   };
 
   return {
@@ -2109,6 +2297,7 @@ app.post("/v1/license/refresh", async (req, reply) => {
       ...buildResponseBase("licensed_expired", "La licencia está vencida."),
       license_id: license.id,
       license_kind: license.license_kind,
+      ...licenseFeatureResponse(license),
       issued_at_utc: license.issued_at_utc,
       expires_at_utc: license.expires_at_utc,
       refresh_token: refresh.token
@@ -2119,6 +2308,7 @@ app.post("/v1/license/refresh", async (req, reply) => {
     ...buildResponseBase("licensed_active", "Licencia revalidada correctamente."),
     license_id: license.id,
     license_kind: license.license_kind,
+    ...licenseFeatureResponse(license),
     issued_at_utc: license.issued_at_utc,
     expires_at_utc: license.expires_at_utc,
     license_token: issueLicenseToken({
