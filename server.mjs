@@ -540,6 +540,13 @@ function saveAdminConfig() {
     message: "Configuración admin guardada en este navegador.",
     backendBase: cfg.backendBase
   });
+
+  if (cfg.adminSecret) {
+    loadTrialConfig(false).catch(() => {});
+    listLicenses();
+  } else {
+    setTableMessage("Pega tu ADMIN_SECRET y toca Guardar conexion o Probar conexion para cargar las licencias.");
+  }
 }
 
 function clearAdminConfig() {
@@ -555,6 +562,7 @@ function clearAdminConfig() {
     ok: true,
     message: "Configuración admin limpiada."
   });
+  setTableMessage("ADMIN_SECRET limpiado. Pega el secreto admin para ver las licencias.");
 }
 
 async function testAdminConfig() {
@@ -566,8 +574,10 @@ async function testAdminConfig() {
       backendBase: baseUrl(),
       summary: payload?.summary || null
     });
+    await listLicenses();
   } catch (e) {
     show(e);
+    setTableMessage(adminErrorMessage(e));
   }
 }
 
@@ -682,8 +692,10 @@ async function saveTrialConfig() {
     const payload = await api("POST", "/admin/trial/config", { amount, unit });
     applyTrialConfigInputs(payload);
     show(payload);
+    await listLicenses();
   } catch (e) {
     show(e);
+    setTableMessage(adminErrorMessage(e));
   }
 }
 function setTrialPreset(amount, unit) {
@@ -826,8 +838,33 @@ async function quickAdjust(days) {
   await extendLicense();
 }
 
+function adminErrorMessage(e) {
+  const code = typeof e === "string" ? e : String(e?.error || e?.message || "");
+  if (code === "unauthorized") {
+    return "ADMIN_SECRET invalido o faltante. Pegalo arriba, guarda la conexion y vuelve a refrescar el listado.";
+  }
+  if (code === "Failed to fetch") {
+    return "No se pudo conectar al servidor. Revisa la URL de Railway en Conexion admin.";
+  }
+  return code
+    ? "No se pudo cargar el listado: " + code
+    : "No se pudo cargar el listado. Revisa el resultado de la derecha.";
+}
+
+function setTableMessage(message, tone = "warn") {
+  const el = document.getElementById("tableWrap");
+  if (!el) return;
+  const colorClass = tone === "bad" ? "bad" : tone === "ok" ? "ok" : "warn";
+  el.innerHTML = '<div class="' + colorClass + '">' + escHtml(message) + '</div>';
+}
+
 async function listLicenses() {
   try {
+    if (!getInputValue("adminSecret", "")) {
+      setTableMessage("Pega tu ADMIN_SECRET arriba y toca Guardar conexion o Probar conexion para ver las licencias.");
+      return;
+    }
+
     const q = encodeURIComponent(document.getElementById("filterQ").value.trim());
     const status = encodeURIComponent(document.getElementById("filterStatus").value.trim());
     const limit = encodeURIComponent(document.getElementById("filterLimit").value.trim() || "200");
@@ -842,7 +879,10 @@ async function listLicenses() {
 
     show(payload);
     renderTable(payload);
-  } catch (e) { show(e); }
+  } catch (e) {
+    show(e);
+    setTableMessage(adminErrorMessage(e));
+  }
 }
 function escHtml(v) {
   return String(v ?? "")
@@ -1430,7 +1470,12 @@ app.get("/", async (req, reply) => {
 });
 
 app.get("/admin/ui", async (_req, reply) => {
-  reply.type("text/html; charset=utf-8").send(ADMIN_UI_HTML);
+  reply
+    .header("Cache-Control", "no-store, max-age=0")
+    .header("Pragma", "no-cache")
+    .header("Expires", "0")
+    .type("text/html; charset=utf-8")
+    .send(ADMIN_UI_HTML);
 });
 
 app.get("/admin/trial/config", async (req, reply) => {
