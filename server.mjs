@@ -461,12 +461,12 @@ th:nth-child(10), td:nth-child(10){ width:82px; } /* acciones */
       </div>
 
       <div class="row3">
-        <button onclick="setLicenseModel('pro')">Modelo Pro</button>
-        <button onclick="setLicenseModel('ai')">Modelo AI</button>
-        <button onclick="getByKey()">Leer modelo</button>
+        <button onclick="setLicenseModel('pro')">Mover a licencia Pro</button>
+        <button onclick="setLicenseModel('ai')">Mover a licencia AI</button>
+        <button onclick="getByKey()">Leer licencia</button>
       </div>
 
-      <div class="muted">Usá días positivos para sumar y negativos para restar.</div>
+      <div class="muted">Usa dias positivos para sumar y negativos para restar. Mover licencia no crea otro codigo: cambia las banderas del mismo License Key.</div>
     </section>
   </div>
 
@@ -1029,7 +1029,7 @@ function renderTable(payload) {
     <button class="btnTiny btnDanger" onclick="quickAction('revoke','\${k}')">Revocar</button>
     <button class="btnTiny btnWarn" onclick="quickAction('release','\${k}')">Liberar</button>
     <button class="btnTiny btnOk" onclick="quickAction('restore','\${k}')">Restaurar</button>
-    <button class="btnTiny" onclick="quickAction('\${model === "ai" ? "model_pro" : "model_ai"}','\${k}')">\${model === "ai" ? "A Pro" : "A AI"}</button>
+    <button class="btnTiny" title="\${model === "ai" ? "Mover a licencia Pro" : "Mover a licencia AI"}" onclick="quickAction('\${model === "ai" ? "model_pro" : "model_ai"}','\${k}')">\${model === "ai" ? "Mover Pro" : "Mover AI"}</button>
   </div>
 </td>
       </tr>
@@ -1842,6 +1842,7 @@ app.post("/admin/license/features", async (req, reply) => {
 
   return {
     ok: true,
+    message: `Licencia movida a ${licenseAppModel(license).toUpperCase()}. Es el mismo License Key; no se creo otro codigo.`,
     license_id: license.id,
     license_key: license.license_key,
     license_kind: license.license_kind,
