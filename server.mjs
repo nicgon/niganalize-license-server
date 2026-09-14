@@ -24,6 +24,7 @@ const DEFAULT_TRIAL_AMOUNT = 15;
 const DEFAULT_TRIAL_UNIT = "days";
 const LICENSE_DAYS_DEFAULT = 365;
 const REFRESH_TOKEN_DAYS = 30;
+const LICENSE_CONTRACT_VERSION = 2;
 const TRIAL_FULL_FEATURES = Object.freeze({
   ai: true,
   motec_export: true
@@ -1305,6 +1306,7 @@ function applyLicenseFeatures(license, features) {
 
 function licenseFeatureResponse(license) {
   return {
+    license_contract_version: LICENSE_CONTRACT_VERSION,
     features: licenseFeatures(license),
     app_model: licenseAppModel(license)
   };
@@ -1359,6 +1361,7 @@ function issueLicenseToken({ license, device_id, fingerprint_hash }) {
   const claims = {
     v: 1,
     typ: "license",
+    license_contract_version: LICENSE_CONTRACT_VERSION,
     license_id: license.id,
     license_kind: license.license_kind,
     app_model: licenseAppModel(license),
@@ -1389,6 +1392,7 @@ function buildResponseBase(status, message) {
   return {
     status,
     message,
+    license_contract_version: LICENSE_CONTRACT_VERSION,
     server_time_utc: nowIso(),
     trial_expires_at_utc: null,
     license_id: null,
@@ -1453,6 +1457,8 @@ app.get("/v1/meta/signing-public-key", async () => {
   return {
     ok: true,
     algorithm: "ed25519",
+    license_contract_version: LICENSE_CONTRACT_VERSION,
+    license_models: ["pro", "ai"],
     public_key_b64: SIGNING.publicKeyB64
   };
 });
@@ -1461,6 +1467,8 @@ app.get("/health", async () => {
   return {
     ok: true,
     service: "niganalize-license-server",
+    license_contract_version: LICENSE_CONTRACT_VERSION,
+    license_models: ["pro", "ai"],
     time_utc: nowIso()
   };
 });
